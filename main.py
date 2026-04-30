@@ -8,6 +8,9 @@ Plans: trial | starter | pro | enterprise
 from __future__ import annotations
 
 import hashlib
+import json as _json
+import os as _os
+from pathlib import Path as _Path
 import json
 import logging
 import os
@@ -323,3 +326,37 @@ def delete_license(key: str, db: Session = Depends(_get_db)):
     db.delete(lic)
     db.commit()
     return {"ok": True}
+
+
+# ---------- Auto-update endpoints ----------
+
+_MANIFEST_PATH = _Path(__file__).parent / "manifest.json"
+
+
+@app.get("/api/update/manifest")
+def get_update_manifest():
+    """Serve the update manifest. Edit manifest.json and redeploy to push updates."""
+    try:
+        data = _json.loads(_MANIFEST_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        data = {"version": "1.0.0", "download_url": "", "notes": ""}
+    return data
+
+
+@app.get("/api/update/check")
+def check_update(current_version: str = "1.0.0"):
+    """Compare current_version with manifest version."""
+    try:
+        data = _json.loads(_MANIFEST_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        data = {"version": "1.0.0", "download_url": "", "notes": ""}
+
+    latest = data.get("version", "1.0.0")
+    available = latest != current_version and bool(data.get("download_url", ""))
+    return {
+        "available": available,
+        "latest_version": latest,
+        "current_version": current_version,
+        "download_url": data.get("download_url", ""),
+        "notes": data.get("notes", ""),
+    }
