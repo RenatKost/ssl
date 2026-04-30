@@ -1,5 +1,5 @@
 {
-  "version": "1.1.4",
-  "download_url": "https://github.com/RenatKost/ss/releases/download/v1.1.4/TrafficOS_Setup_v1.1.4.exe",
-  "notes": "Исправлено уведомление об обновлениях"
+  "version": "1.1.5",
+  "download_url": "https://github.com/RenatKost/ss/releases/download/v1.1.5/TrafficOS_Setup_v1.1.5.exe",
+  "notes": "Улучшен интерфейс: страница лицензии, окно ограничений"
 }
