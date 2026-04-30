@@ -1,5 +1,5 @@
 {
-  "version": "1.1.0",
-  "download_url": "https://github.com/RenatKost/ss/releases/download/v1.1.0/TrafficOS_Setup_v1.1.0.exe",
-  "notes": "Новый дизайн TopBar, исправлена кнопка улучшения плана"
+  "version": "1.1.1",
+  "download_url": "https://github.com/RenatKost/ss/releases/download/v1.1.1/TrafficOS_Setup_v1.1.1.exe",
+  "notes": "Ограничения по планам: блюр и оверлей для Instagram/Twitter/Видео. Кнопка улучшить план теперь работает."
 }
