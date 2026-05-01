@@ -1,5 +1,5 @@
-{
-  "version": "1.1.6",
-  "download_url": "https://github.com/RenatKost/ss/releases/download/v1.1.6/TrafficOS_Setup_v1.1.6.exe",
-  "notes": "Прогресс-бар при обновлении"
+﻿{
+  "version": "1.1.7",
+  "download_url": "https://github.com/RenatKost/ss/releases/download/v1.1.7/TrafficOS_Setup_v1.1.7.exe",
+  "notes": "Фильтр по Telegram Premium, кружки (Video Notes)"
 }
