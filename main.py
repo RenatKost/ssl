@@ -330,33 +330,38 @@ def delete_license(key: str, db: Session = Depends(_get_db)):
 
 # ---------- Auto-update endpoints ----------
 
-_MANIFEST_PATH = _Path(__file__).parent / "manifest.json"
+# Update these values on every release (do NOT rely on reading manifest.json from disk —
+# Railway may not expose it reliably; hardcoding is simpler and always correct).
+_MANIFEST = {
+    "version": "1.1.7",
+    "download_url": "https://github.com/RenatKost/ss/releases/download/v1.1.7/TrafficOS_Setup_v1.1.7.exe",
+    "notes": "Фильтр по Telegram Premium, кружки (Video Notes)",
+}
+
+
+def _version_gt(a: str, b: str) -> bool:
+    """Return True if version a is strictly greater than b."""
+    try:
+        return tuple(int(x) for x in a.split(".")) > tuple(int(x) for x in b.split("."))
+    except Exception:
+        return False
 
 
 @app.get("/api/update/manifest")
 def get_update_manifest():
-    """Serve the update manifest. Edit manifest.json and redeploy to push updates."""
-    try:
-        data = _json.loads(_MANIFEST_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        data = {"version": "1.0.0", "download_url": "", "notes": ""}
-    return data
+    """Serve the update manifest."""
+    return _MANIFEST
 
 
 @app.get("/api/update/check")
 def check_update(current_version: str = "1.0.0"):
     """Compare current_version with manifest version."""
-    try:
-        data = _json.loads(_MANIFEST_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        data = {"version": "1.0.0", "download_url": "", "notes": ""}
-
-    latest = data.get("version", "1.0.0")
-    available = latest != current_version and bool(data.get("download_url", ""))
+    latest = _MANIFEST["version"]
+    available = _version_gt(latest, current_version)
     return {
         "available": available,
         "latest_version": latest,
         "current_version": current_version,
-        "download_url": data.get("download_url", ""),
-        "notes": data.get("notes", ""),
+        "download_url": _MANIFEST["download_url"] if available else "",
+        "notes": _MANIFEST["notes"] if available else "",
     }
