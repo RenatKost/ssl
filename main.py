@@ -333,9 +333,9 @@ def delete_license(key: str, db: Session = Depends(_get_db)):
 # Update these values on every release (do NOT rely on reading manifest.json from disk —
 # Railway may not expose it reliably; hardcoding is simpler and always correct).
 _MANIFEST = {
-    "version": "1.1.7",
-    "download_url": "https://github.com/RenatKost/ss/releases/download/v1.1.7/TrafficOS_Setup_v1.1.7.exe",
-    "notes": "Фильтр по Telegram Premium, кружки (Video Notes)",
+    "version": "1.1.8",
+    "download_url": "https://github.com/RenatKost/ss/releases/download/v1.1.8/TrafficOS_Setup_v1.1.8.exe",
+    "notes": "Исправлен мобильный доступ по LAN, исправлено обновление для пользователей старых версий",
 }
 
 
