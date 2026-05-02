@@ -333,8 +333,8 @@ def delete_license(key: str, db: Session = Depends(_get_db)):
 # Update these values on every release (do NOT rely on reading manifest.json from disk вЂ”
 # Railway may not expose it reliably; hardcoding is simpler and always correct).
 _MANIFEST = {
-    "version": "1.2.2",
-    "download_url": "https://github.com/RenatKost/ss/releases/download/v1.2.2/TrafficOS_Setup_v1.2.2.exe",
+    "version": "1.2.3",
+    "download_url": "https://github.com/RenatKost/ss/releases/download/v1.2.3/TrafficOS_Setup_v1.2.3.exe",
     "notes": "Relay-С‚СЂРµРєРёРЅРі РІРєР»СЋС‡Р°РµС‚СЃСЏ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё РґР»СЏ РІСЃРµС… РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№. РђРЅР°Р»РёС‚РёРєР°: РёРєРѕРЅРєРё Р±СЂР°СѓР·РµСЂРѕРІ Рё РћРЎ, РіРѕСЂРѕРґ РІ СЃРѕР±С‹С‚РёСЏС…. UI: СѓР±СЂР°РЅС‹ РёРЅСЃС‚СЂСѓРєС†РёРё РёР· СЃС‚СЂР°РЅРёС†С‹ СЃСЃС‹Р»РѕРє.",
 }
 
@@ -365,3 +365,4 @@ def check_update(current_version: str = "1.0.0"):
         "download_url": _MANIFEST["download_url"] if available else "",
         "notes": _MANIFEST["notes"] if available else "",
     }
+
