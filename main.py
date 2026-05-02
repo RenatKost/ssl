@@ -1,4 +1,4 @@
-"""
+﻿"""
 TGPars License Server
 Minimal FastAPI service for managing license keys.
 Deploy on Railway (free tier) or any VPS.
@@ -178,7 +178,7 @@ def validate(req: ValidateRequest, db: Session = Depends(_get_db)):
         if lic.activated_at:
             expires_at = lic.activated_at + timedelta(days=lic.trial_days)
         else:
-            # Never activated yet — expires_at not set
+            # Never activated yet вЂ” expires_at not set
             expires_at = None
 
     if expires_at and now > expires_at:
@@ -208,7 +208,7 @@ def activate(req: ActivateRequest, db: Session = Depends(_get_db)):
     machines: list[str] = json.loads(lic.machine_ids)
 
     if req.machine_id in machines:
-        # Already registered — just return success
+        # Already registered вЂ” just return success
         pass
     elif len(machines) >= lic.max_machines:
         raise HTTPException(
@@ -330,12 +330,12 @@ def delete_license(key: str, db: Session = Depends(_get_db)):
 
 # ---------- Auto-update endpoints ----------
 
-# Update these values on every release (do NOT rely on reading manifest.json from disk —
+# Update these values on every release (do NOT rely on reading manifest.json from disk вЂ”
 # Railway may not expose it reliably; hardcoding is simpler and always correct).
 _MANIFEST = {
-    "version": "1.2.1",
-    "download_url": "https://github.com/RenatKost/ss/releases/download/v1.2.1/TrafficOS_Setup_v1.2.1.exe",
-    "notes": "Relay-трекинг включается автоматически для всех пользователей. Аналитика: иконки браузеров и ОС, город в событиях. UI: убраны инструкции из страницы ссылок.",
+    "version": "1.2.2",
+    "download_url": "https://github.com/RenatKost/ss/releases/download/v1.2.2/TrafficOS_Setup_v1.2.2.exe",
+    "notes": "Relay-С‚СЂРµРєРёРЅРі РІРєР»СЋС‡Р°РµС‚СЃСЏ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё РґР»СЏ РІСЃРµС… РїРѕР»СЊР·РѕРІР°С‚РµР»РµР№. РђРЅР°Р»РёС‚РёРєР°: РёРєРѕРЅРєРё Р±СЂР°СѓР·РµСЂРѕРІ Рё РћРЎ, РіРѕСЂРѕРґ РІ СЃРѕР±С‹С‚РёСЏС…. UI: СѓР±СЂР°РЅС‹ РёРЅСЃС‚СЂСѓРєС†РёРё РёР· СЃС‚СЂР°РЅРёС†С‹ СЃСЃС‹Р»РѕРє.",
 }
 
 
