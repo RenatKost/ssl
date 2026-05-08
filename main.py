@@ -335,7 +335,7 @@ def delete_license(key: str, db: Session = Depends(_get_db)):
 _MANIFEST = {
     "version": "1.2.7",
     "download_url": "https://github.com/RenatKost/ss/releases/download/v1.2.7/TrafficOS_Setup_v1.2.7.exe",
-    "notes": "Исправлен фильтр \u00abСо Stories\u00bb \u2014 теперь показывает только пользователей с активными сторис. Добавлена кнопка сброса устаревших флагов.",
+    "notes": "Fixed Stories filter вЂ” now shows only users with active stories. Added reset flags button.",
 }
 
 
