@@ -333,9 +333,9 @@ def delete_license(key: str, db: Session = Depends(_get_db)):
 # Update these values on every release (do NOT rely on reading manifest.json from disk —
 # Railway may not expose it reliably; hardcoding is simpler and always correct).
 _MANIFEST = {
-    "version": "1.2.7",
-    "download_url": "https://github.com/RenatKost/ss/releases/download/v1.2.7/TrafficOS_Setup_v1.2.7.exe",
-    "notes": "Fixed Stories filter — now shows only users with active stories. Added reset flags button.",
+    "version": "1.2.8",
+    "download_url": "https://github.com/RenatKost/ss/releases/download/v1.2.8/TrafficOS_Setup_v1.2.8.exe",
+    "notes": "Fixed Telegram entity resolution errors. Instagram browser login. Text selection fix.",
 }
 
 
