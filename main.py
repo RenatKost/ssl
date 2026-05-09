@@ -1,4 +1,4 @@
-"""
+﻿"""
 TGPars License Server
 Minimal FastAPI service for managing license keys.
 Deploy on Railway (free tier) or any VPS.
@@ -178,7 +178,7 @@ def validate(req: ValidateRequest, db: Session = Depends(_get_db)):
         if lic.activated_at:
             expires_at = lic.activated_at + timedelta(days=lic.trial_days)
         else:
-            # Never activated yet — expires_at not set
+            # Never activated yet вЂ” expires_at not set
             expires_at = None
 
     if expires_at and now > expires_at:
@@ -208,7 +208,7 @@ def activate(req: ActivateRequest, db: Session = Depends(_get_db)):
     machines: list[str] = json.loads(lic.machine_ids)
 
     if req.machine_id in machines:
-        # Already registered — just return success
+        # Already registered вЂ” just return success
         pass
     elif len(machines) >= lic.max_machines:
         raise HTTPException(
@@ -330,12 +330,12 @@ def delete_license(key: str, db: Session = Depends(_get_db)):
 
 # ---------- Auto-update endpoints ----------
 
-# Update these values on every release (do NOT rely on reading manifest.json from disk —
+# Update these values on every release (do NOT rely on reading manifest.json from disk вЂ”
 # Railway may not expose it reliably; hardcoding is simpler and always correct).
 _MANIFEST = {
-    "version": "1.3.7",
-    "download_url": "https://github.com/RenatKost/ss/releases/download/v1.3.7/TrafficOS_Setup_v1.3.7.exe",
-    "notes": "Hotfix: исправлена установка обновлений (совместимость с per-user инсталляцией).",
+    "version": "1.3.8",
+    "download_url": "https://github.com/RenatKost/ss/releases/download/v1.3.8/TrafficOS_Setup_v1.3.8.exe",
+    "notes": "Hotfix: РёСЃРїСЂР°РІР»РµРЅР° СѓСЃС‚Р°РЅРѕРІРєР° РѕР±РЅРѕРІР»РµРЅРёР№ (СЃРѕРІРјРµСЃС‚РёРјРѕСЃС‚СЊ СЃ per-user РёРЅСЃС‚Р°Р»Р»СЏС†РёРµР№).",
 }
 
 
