@@ -8,7 +8,9 @@ Plans: trial | starter | pro | enterprise
 from __future__ import annotations
 
 import hashlib
+import hashlib as _hashlib_pay
 import hmac as _hmac_mod
+import hmac as _hmac_pay
 import json as _json
 import os as _os
 from pathlib import Path as _Path
@@ -20,7 +22,8 @@ import string
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+import httpx
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import Column, DateTime, Integer, String, Text, create_engine, text
@@ -30,8 +33,35 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("license-server")
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./licenses.db")
-ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "changeme-admin-secret")
-HMAC_SECRET = os.environ.get("HMAC_SECRET", "").encode()
+ADMIN_TOKEN  = os.environ.get("ADMIN_TOKEN", "changeme-admin-secret")
+HMAC_SECRET  = os.environ.get("HMAC_SECRET", "").encode()
+
+# ── Payment / email config ────────────────────────────────────────────────────
+RESEND_API_KEY            = os.environ.get("RESEND_API_KEY", "")
+FROM_EMAIL                = os.environ.get("FROM_EMAIL", "noreply@traffic-os.com")
+WEBSITE_URL               = os.environ.get("WEBSITE_URL", "https://traffic-os.com")
+STRIPE_SECRET_KEY         = os.environ.get("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET     = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+CRYPTOPAY_API_KEY         = os.environ.get("CRYPTOPAY_API_KEY", "")
+CRYPTOPAY_CALLBACK_SECRET = os.environ.get("CRYPTOPAY_CALLBACK_SECRET", "")
+
+# Stripe Price IDs — set in Railway env vars after creating products in Stripe Dashboard
+STRIPE_PRICES: dict[str, str] = {
+    "starter_monthly":    os.environ.get("STRIPE_PRICE_STARTER_MONTHLY", ""),
+    "starter_yearly":     os.environ.get("STRIPE_PRICE_STARTER_YEARLY", ""),
+    "pro_monthly":        os.environ.get("STRIPE_PRICE_PRO_MONTHLY", ""),
+    "pro_yearly":         os.environ.get("STRIPE_PRICE_PRO_YEARLY", ""),
+    "enterprise_monthly": os.environ.get("STRIPE_PRICE_ENT_MONTHLY", ""),
+    "enterprise_yearly":  os.environ.get("STRIPE_PRICE_ENT_YEARLY", ""),
+}
+
+PLAN_PERIODS: dict[str, int] = {"monthly": 30, "yearly": 365}
+
+_PLAN_PRICES_USD: dict[str, int] = {
+    "starter_monthly": 19,  "starter_yearly": 149,
+    "pro_monthly":     39,  "pro_yearly":     299,
+    "enterprise_monthly": 99, "enterprise_yearly": 799,
+}
 
 
 def _sign_response(valid: bool, plan: str, expires_at, server_time: str) -> str:
@@ -451,9 +481,242 @@ def delete_license(key: str, db: Session = Depends(_get_db)):
     return {"ok": True}
 
 
-# ---------- Auto-update endpoints ----------
+# ── Email helper ──────────────────────────────────────────────────────────────
 
-# Update these values on every release (do NOT rely on reading manifest.json from disk вЂ”
+async def _send_license_email(email: str, key: str, plan: str, expires_at) -> bool:
+    if not RESEND_API_KEY:
+        log.warning("RESEND_API_KEY not set — skipping email to %s", email)
+        return False
+    expires_str = expires_at.strftime("%d %B %Y") if expires_at else "Never"
+    cabinet_url  = f"{WEBSITE_URL}/cabinet?key={key}"
+    download_url = _MANIFEST["download_url"]
+    body_html = f"""
+<div style="font-family:sans-serif;max-width:560px;margin:0 auto;color:#1a1a2e">
+  <h2 style="margin-bottom:4px">Your TrafficOS License 🎉</h2>
+  <p style="color:#6b7280">Thank you for your purchase!</p>
+  <div style="background:#f4f4f8;border-radius:10px;padding:20px 24px;margin:20px 0;
+              font-size:24px;font-weight:700;letter-spacing:3px;text-align:center;
+              color:#4f46e5">{key}</div>
+  <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
+    <tr><td style="padding:6px 0;color:#6b7280">Plan</td>
+        <td style="padding:6px 0;font-weight:600">{plan.title()}</td></tr>
+    <tr><td style="padding:6px 0;color:#6b7280">Valid until</td>
+        <td style="padding:6px 0;font-weight:600">{expires_str}</td></tr>
+  </table>
+  <a href="{download_url}"
+     style="display:inline-block;background:#4f46e5;color:#fff;padding:12px 24px;
+            border-radius:8px;text-decoration:none;font-weight:600;margin-right:10px">
+    ⬇ Download TrafficOS
+  </a>
+  <a href="{cabinet_url}"
+     style="display:inline-block;background:#f4f4f8;color:#1a1a2e;padding:12px 24px;
+            border-radius:8px;text-decoration:none;font-weight:600">
+    My Cabinet
+  </a>
+  <p style="margin-top:24px;color:#9ca3af;font-size:12px">
+    Keep this email — your key is the only way to manage your license.<br>
+    Enter it in TrafficOS: Settings → License → Activate.
+  </p>
+</div>"""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
+                json={
+                    "from": FROM_EMAIL,
+                    "to": [email],
+                    "subject": f"Your TrafficOS {plan.title()} License Key",
+                    "html": body_html,
+                },
+            )
+        if resp.status_code in (200, 201):
+            log.info("License email sent to %s (plan=%s)", email, plan)
+            return True
+        log.warning("Resend error %s: %s", resp.status_code, resp.text)
+        return False
+    except Exception as exc:
+        log.warning("Email send failed: %s", exc)
+        return False
+
+
+def _create_license_for_payment(db: Session, plan: str, period: str, email: str) -> tuple:
+    days = PLAN_PERIODS.get(period, 30)
+    key = _generate_key()
+    expires_at = datetime.utcnow() + timedelta(days=days)
+    lic = License(
+        key=key, plan=plan, machine_ids="[]", max_machines=2,
+        expires_at=expires_at, notes=f"payment:{email}",
+    )
+    db.add(lic)
+    db.commit()
+    return key, expires_at
+
+
+# ── Cabinet (public) ──────────────────────────────────────────────────────────
+
+@app.get("/cabinet/{key}")
+def cabinet(key: str, db: Session = Depends(_get_db)):
+    lic = db.query(License).filter(License.key == key).first()
+    if not lic:
+        raise HTTPException(status_code=404, detail="key_not_found")
+    now = datetime.utcnow()
+    expires_at = lic.expires_at
+    if lic.plan == "trial" and lic.trial_days and lic.activated_at:
+        expires_at = lic.activated_at + timedelta(days=lic.trial_days)
+    machines: list[str] = json.loads(lic.machine_ids)
+    days_left = max(0, (expires_at - now).days) if expires_at else None
+    active = not (expires_at and now > expires_at)
+    return {
+        "key": key,
+        "plan": lic.plan,
+        "features": PLAN_FEATURES.get(lic.plan, {}),
+        "expires_at": expires_at.isoformat() if expires_at else None,
+        "days_left": days_left,
+        "active": active,
+        "machines_used": len(machines),
+        "max_machines": lic.max_machines,
+        "download_url": _MANIFEST["download_url"],
+        "latest_version": _MANIFEST["version"],
+    }
+
+
+# ── Stripe ────────────────────────────────────────────────────────────────────
+
+class StripeSessionRequest(BaseModel):
+    plan: str
+    period: str
+    email: str
+
+
+@app.post("/payment/stripe/create-session")
+async def stripe_create_session(req: StripeSessionRequest):
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="Stripe not configured")
+    import stripe as _stripe
+    _stripe.api_key = STRIPE_SECRET_KEY
+    price_key = f"{req.plan}_{req.period}"
+    price_id = STRIPE_PRICES.get(price_key)
+    if not price_id:
+        raise HTTPException(status_code=400, detail=f"Unknown plan/period: {price_key}")
+    session = _stripe.checkout.Session.create(
+        payment_method_types=["card"],
+        line_items=[{"price": price_id, "quantity": 1}],
+        mode="payment",
+        customer_email=req.email,
+        metadata={"plan": req.plan, "period": req.period, "email": req.email},
+        success_url=f"{WEBSITE_URL}/success?session_id={{CHECKOUT_SESSION_ID}}",
+        cancel_url=f"{WEBSITE_URL}/pricing",
+    )
+    return {"checkout_url": session.url}
+
+
+@app.post("/payment/stripe/webhook")
+async def stripe_webhook(request: Request, db: Session = Depends(_get_db)):
+    if not STRIPE_WEBHOOK_SECRET:
+        raise HTTPException(status_code=503, detail="Stripe webhook secret not configured")
+    import stripe as _stripe
+    import asyncio
+    _stripe.api_key = STRIPE_SECRET_KEY
+    payload = await request.body()
+    sig = request.headers.get("stripe-signature", "")
+    try:
+        event = _stripe.Webhook.construct_event(payload, sig, STRIPE_WEBHOOK_SECRET)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if event["type"] == "checkout.session.completed":
+        meta  = event["data"]["object"].get("metadata", {})
+        email  = meta.get("email", "")
+        plan   = meta.get("plan", "starter")
+        period = meta.get("period", "monthly")
+        key, expires_at = _create_license_for_payment(db, plan, period, email)
+        log.info("Stripe payment OK: plan=%s email=%s key=%s", plan, email, key)
+        asyncio.create_task(_send_license_email(email, key, plan, expires_at))
+    return {"ok": True}
+
+
+# ── Cryptopay ─────────────────────────────────────────────────────────────────
+
+class CryptopayInvoiceRequest(BaseModel):
+    plan: str
+    period: str
+    email: str
+    currency: str = "USDT"
+
+
+@app.post("/payment/cryptopay/create-invoice")
+async def cryptopay_create_invoice(req: CryptopayInvoiceRequest):
+    if not CRYPTOPAY_API_KEY:
+        raise HTTPException(status_code=503, detail="Cryptopay not configured")
+    price_key = f"{req.plan}_{req.period}"
+    amount = _PLAN_PRICES_USD.get(price_key)
+    if not amount:
+        raise HTTPException(status_code=400, detail=f"Unknown plan/period: {price_key}")
+    # Webhook must point to the license server (Railway URL), not the website
+    license_server_url = os.environ.get(
+        "LICENSE_SERVER_URL", "https://web-production-8c6356.up.railway.app"
+    )
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            "https://business.cryptopay.me/api/invoices",
+            headers={"Authorization": f"Bearer {CRYPTOPAY_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "price_amount": amount,
+                "price_currency": "USD",
+                "pay_currency": req.currency,
+                "description": f"TrafficOS {req.plan.title()} ({req.period})",
+                "callback_url": f"{license_server_url}/payment/cryptopay/webhook",
+                "metadata": {"plan": req.plan, "period": req.period, "email": req.email},
+            },
+        )
+    if resp.status_code not in (200, 201):
+        log.warning("Cryptopay error %s: %s", resp.status_code, resp.text)
+        raise HTTPException(status_code=502, detail="Cryptopay error")
+    data = resp.json().get("data", resp.json())
+    return {"invoice_url": data.get("hosted_page_url", ""), "invoice_id": str(data.get("id", ""))}
+
+
+@app.post("/payment/cryptopay/webhook")
+async def cryptopay_webhook(request: Request, db: Session = Depends(_get_db)):
+    import asyncio
+    payload = await request.body()
+    if CRYPTOPAY_CALLBACK_SECRET:
+        sig = request.headers.get("x-cryptopay-signature", "")
+        expected = _hmac_pay.new(
+            CRYPTOPAY_CALLBACK_SECRET.encode(), payload, _hashlib_pay.sha256
+        ).hexdigest()
+        if not _hmac_pay.compare_digest(sig, expected):
+            raise HTTPException(status_code=400, detail="Invalid signature")
+    body = json.loads(payload)
+    invoice = body.get("data", body)
+    if invoice.get("status") != "completed":
+        return {"ok": True}
+    meta   = invoice.get("metadata", {})
+    email  = meta.get("email", "")
+    plan   = meta.get("plan", "starter")
+    period = meta.get("period", "monthly")
+    key, expires_at = _create_license_for_payment(db, plan, period, email)
+    log.info("Cryptopay payment OK: plan=%s email=%s key=%s", plan, email, key)
+    asyncio.create_task(_send_license_email(email, key, plan, expires_at))
+    return {"ok": True}
+
+
+@app.get("/payment/cryptopay/status/{invoice_id}")
+async def cryptopay_status(invoice_id: str):
+    if not CRYPTOPAY_API_KEY:
+        raise HTTPException(status_code=503, detail="Cryptopay not configured")
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(
+            f"https://business.cryptopay.me/api/invoices/{invoice_id}",
+            headers={"Authorization": f"Bearer {CRYPTOPAY_API_KEY}"},
+        )
+    data = resp.json().get("data", resp.json())
+    return {"paid": data.get("status") == "completed", "status": data.get("status", "")}
+
+
+# ── Auto-update endpoints ─────────────────────────────────────────────────────
+
+# Update these values on every release
 # Railway may not expose it reliably; hardcoding is simpler and always correct).
 _MANIFEST = {
     "version": "1.4.8",
