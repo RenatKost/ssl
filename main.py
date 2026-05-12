@@ -8,6 +8,7 @@ Plans: trial | starter | pro | enterprise
 from __future__ import annotations
 
 import hashlib
+import hmac as _hmac_mod
 import json as _json
 import os as _os
 from pathlib import Path as _Path
@@ -30,6 +31,15 @@ log = logging.getLogger("license-server")
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./licenses.db")
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "changeme-admin-secret")
+HMAC_SECRET = os.environ.get("HMAC_SECRET", "").encode()
+
+
+def _sign_response(valid: bool, plan: str, expires_at, server_time: str) -> str:
+    """Sign the key fields of a valid response so the client can detect tampering."""
+    if not HMAC_SECRET:
+        return ""
+    payload = f"{valid}|{plan or ''}|{expires_at or ''}|{server_time}".encode()
+    return _hmac_mod.new(HMAC_SECRET, payload, hashlib.sha256).hexdigest()
 
 engine = create_engine(
     DATABASE_URL,
@@ -263,13 +273,15 @@ def validate(req: ValidateRequest, db: Session = Depends(_get_db)):
     features = PLAN_FEATURES.get(lic.plan, PLAN_FEATURES["starter"])
     days_left = max(0, (expires_at - now).days) if expires_at else None
 
+    expires_at_str = expires_at.isoformat() if expires_at else None
     return {
         "valid": True,
         "plan": lic.plan,
         "features": features,
-        "expires_at": expires_at.isoformat() if expires_at else None,
+        "expires_at": expires_at_str,
         "days_left": days_left,
         "server_time": server_time,
+        "__sig": _sign_response(True, lic.plan, expires_at_str, server_time),
     }
 
 
@@ -309,14 +321,16 @@ def activate(req: ActivateRequest, db: Session = Depends(_get_db)):
 
     features = PLAN_FEATURES.get(lic.plan, PLAN_FEATURES["starter"])
     days_left = max(0, (expires_at - now).days) if expires_at else None
+    expires_at_str = expires_at.isoformat() if expires_at else None
 
     return {
         "valid": True,
         "plan": lic.plan,
         "features": features,
-        "expires_at": expires_at.isoformat() if expires_at else None,
+        "expires_at": expires_at_str,
         "days_left": days_left,
         "server_time": server_time,
+        "__sig": _sign_response(True, lic.plan, expires_at_str, server_time),
     }
 
 
