@@ -22,7 +22,7 @@ from typing import Optional
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from sqlalchemy import Column, DateTime, Integer, String, Text, create_engine
+from sqlalchemy import Column, DateTime, Integer, String, Text, create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 logging.basicConfig(level=logging.INFO)
@@ -56,9 +56,26 @@ class License(Base):
     activated_at = Column(DateTime, nullable=True)     # first activation timestamp
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.utcnow())
     notes = Column(Text, nullable=True)
+    # JSON dict: {machine_id: {components: {...}, last_seen: "ISO"}}
+    hwid_data = Column(Text, nullable=False, default="{}")
 
 
 Base.metadata.create_all(bind=engine)
+
+
+def _ensure_columns() -> None:
+    """Add columns introduced after initial deploy (safe to run every startup)."""
+    with engine.connect() as conn:
+        for col_sql in ["hwid_data TEXT DEFAULT '{}'"]:
+            col_name = col_sql.split()[0]
+            try:
+                conn.execute(text(f"ALTER TABLE licenses ADD COLUMN {col_sql}"))
+                conn.commit()
+            except Exception:
+                pass  # column already exists
+
+
+_ensure_columns()
 
 
 # ---------- Feature flags per plan ----------
@@ -116,20 +133,52 @@ def _generate_key() -> str:
 
 # ---------- Pydantic models ----------
 
+# Minimum client version allowed to validate (Phase 7 — version locking)
+# Bump this to block clients older than a given version.
+MIN_VERSION = "1.0.0"
+
+
+def _version_gte(a: str, b: str) -> bool:
+    """Return True if version a >= b."""
+    try:
+        return tuple(int(x) for x in a.split(".")) >= tuple(int(x) for x in b.split("."))
+    except Exception:
+        return True
+
+
+def _hwid_match_score(stored: dict, incoming: dict) -> int:
+    """Count matching non-empty component hashes. Max 5 (mac/hostname/machine_guid/disk/cpu)."""
+    score = 0
+    for key in ("mac", "hostname", "machine_guid", "disk", "cpu"):
+        sv, iv = stored.get(key, ""), incoming.get(key, "")
+        if sv and iv and sv == iv:
+            score += 1
+    return score
+
+
 class ValidateRequest(BaseModel):
     key: str
     machine_id: str
     version: str = ""
+    hwid_components: Optional[dict] = None
 
 
 class ActivateRequest(BaseModel):
     key: str
     machine_id: str
+    hwid_components: Optional[dict] = None
 
 
 class DeactivateRequest(BaseModel):
     key: str
     machine_id: str
+
+
+class TransferRequest(BaseModel):
+    key: str
+    old_machine_id: str
+    new_machine_id: str
+    hwid_components: Optional[dict] = None
 
 
 class GenerateRequest(BaseModel):
@@ -159,35 +208,60 @@ def health():
 @app.post("/validate")
 def validate(req: ValidateRequest, db: Session = Depends(_get_db)):
     """Called by TGPars app on startup and every 30 min."""
+    now = datetime.utcnow()
+    server_time = now.isoformat()
+
+    if req.version and not _version_gte(req.version, MIN_VERSION):
+        return {"valid": False, "reason": "version_too_old", "min_version": MIN_VERSION, "server_time": server_time}
+
     lic = db.query(License).filter(License.key == req.key).first()
     if not lic:
-        return {"valid": False, "reason": "key_not_found"}
+        return {"valid": False, "reason": "key_not_found", "server_time": server_time}
 
-    machines = json.loads(lic.machine_ids)
+    machines: list[str] = json.loads(lic.machine_ids)
+    hwid_data: dict = json.loads(lic.hwid_data or "{}")
 
-    # Check machine binding: machine must be in the list (or list is empty = not yet activated)
-    if machines and req.machine_id not in machines:
-        return {"valid": False, "reason": "machine_not_registered"}
+    machine_allowed = False
+    if not machines:
+        return {"valid": False, "reason": "not_activated", "server_time": server_time}
 
-    # Check expiry
-    now = datetime.utcnow()
+    if req.machine_id in machines:
+        machine_allowed = True
+    elif req.hwid_components:
+        for mid, mdata in list(hwid_data.items()):
+            stored_comp = mdata.get("components", {})
+            if _hwid_match_score(stored_comp, req.hwid_components) >= 2:
+                log.info("Fuzzy HWID match: old=%s new=%s", mid, req.machine_id)
+                machines[machines.index(mid)] = req.machine_id
+                entry = hwid_data.pop(mid)
+                entry["components"] = req.hwid_components
+                entry["last_seen"] = server_time
+                hwid_data[req.machine_id] = entry
+                lic.machine_ids = json.dumps(machines)
+                lic.hwid_data = json.dumps(hwid_data)
+                db.commit()
+                machine_allowed = True
+                break
+
+    if not machine_allowed:
+        return {"valid": False, "reason": "machine_not_registered", "server_time": server_time}
+
+    entry = hwid_data.setdefault(req.machine_id, {})
+    entry["last_seen"] = server_time
+    if req.hwid_components:
+        entry["components"] = req.hwid_components
+    lic.hwid_data = json.dumps(hwid_data)
+    db.commit()
+
     expires_at = lic.expires_at
-
-    # Trial: expires_at computed from first activation
     if lic.plan == "trial" and lic.trial_days:
-        if lic.activated_at:
-            expires_at = lic.activated_at + timedelta(days=lic.trial_days)
-        else:
-            # Never activated yet вЂ” expires_at not set
-            expires_at = None
+        expires_at = (lic.activated_at + timedelta(days=lic.trial_days)) if lic.activated_at else None
 
     if expires_at and now > expires_at:
-        return {"valid": False, "reason": "expired"}
+        return {"valid": False, "reason": "expired", "server_time": server_time}
 
     features = PLAN_FEATURES.get(lic.plan, PLAN_FEATURES["starter"])
-    days_left = None
-    if expires_at:
-        days_left = max(0, (expires_at - now).days)
+    days_left = max(0, (expires_at - now).days) if expires_at else None
 
     return {
         "valid": True,
@@ -195,6 +269,7 @@ def validate(req: ValidateRequest, db: Session = Depends(_get_db)):
         "features": features,
         "expires_at": expires_at.isoformat() if expires_at else None,
         "days_left": days_left,
+        "server_time": server_time,
     }
 
 
@@ -205,33 +280,35 @@ def activate(req: ActivateRequest, db: Session = Depends(_get_db)):
     if not lic:
         raise HTTPException(status_code=404, detail="key_not_found")
 
+    now = datetime.utcnow()
+    server_time = now.isoformat()
     machines: list[str] = json.loads(lic.machine_ids)
+    hwid_data: dict = json.loads(lic.hwid_data or "{}")
 
-    if req.machine_id in machines:
-        # Already registered вЂ” just return success
-        pass
-    elif len(machines) >= lic.max_machines:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Machine limit reached ({lic.max_machines}). Deactivate another machine first.",
-        )
-    else:
+    if req.machine_id not in machines:
+        if len(machines) >= lic.max_machines:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Machine limit reached ({lic.max_machines}). Deactivate another machine first.",
+            )
         machines.append(req.machine_id)
         lic.machine_ids = json.dumps(machines)
         if not lic.activated_at:
-            lic.activated_at = datetime.utcnow()
-        db.commit()
+            lic.activated_at = now
 
-    # Compute expiry
-    now = datetime.utcnow()
+    hwid_data[req.machine_id] = {
+        "components": req.hwid_components or {},
+        "last_seen": server_time,
+    }
+    lic.hwid_data = json.dumps(hwid_data)
+    db.commit()
+
     expires_at = lic.expires_at
     if lic.plan == "trial" and lic.trial_days and lic.activated_at:
         expires_at = lic.activated_at + timedelta(days=lic.trial_days)
 
     features = PLAN_FEATURES.get(lic.plan, PLAN_FEATURES["starter"])
-    days_left = None
-    if expires_at:
-        days_left = max(0, (expires_at - now).days)
+    days_left = max(0, (expires_at - now).days) if expires_at else None
 
     return {
         "valid": True,
@@ -239,7 +316,32 @@ def activate(req: ActivateRequest, db: Session = Depends(_get_db)):
         "features": features,
         "expires_at": expires_at.isoformat() if expires_at else None,
         "days_left": days_left,
+        "server_time": server_time,
     }
+
+
+@app.post("/transfer")
+def transfer_machine(req: TransferRequest, db: Session = Depends(_get_db)):
+    """Self-service machine transfer. Old machine slot is freed and replaced by new one."""
+    lic = db.query(License).filter(License.key == req.key).first()
+    if not lic:
+        raise HTTPException(status_code=404, detail="key_not_found")
+
+    machines: list[str] = json.loads(lic.machine_ids)
+    hwid_data: dict = json.loads(lic.hwid_data or "{}")
+
+    if req.old_machine_id not in machines:
+        raise HTTPException(status_code=404, detail="old_machine_not_registered")
+
+    machines[machines.index(req.old_machine_id)] = req.new_machine_id
+    old_entry = hwid_data.pop(req.old_machine_id, {})
+    old_entry["components"] = req.hwid_components or {}
+    old_entry["last_seen"] = datetime.utcnow().isoformat()
+    hwid_data[req.new_machine_id] = old_entry
+    lic.machine_ids = json.dumps(machines)
+    lic.hwid_data = json.dumps(hwid_data)
+    db.commit()
+    return {"ok": True, "machine_id": req.new_machine_id}
 
 
 @app.post("/deactivate")
@@ -250,9 +352,12 @@ def deactivate(req: DeactivateRequest, db: Session = Depends(_get_db)):
         raise HTTPException(status_code=404, detail="key_not_found")
 
     machines: list[str] = json.loads(lic.machine_ids)
+    hwid_data: dict = json.loads(lic.hwid_data or "{}")
     if req.machine_id in machines:
         machines.remove(req.machine_id)
+        hwid_data.pop(req.machine_id, None)
         lic.machine_ids = json.dumps(machines)
+        lic.hwid_data = json.dumps(hwid_data)
         db.commit()
 
     return {"ok": True, "machines_left": len(machines)}
@@ -281,6 +386,10 @@ def list_licenses(db: Session = Depends(_get_db)):
             "created_at": lic.created_at.isoformat(),
             "notes": lic.notes,
             "active": not (expires_at and now > expires_at),
+            "last_seen": {
+                mid: mdata.get("last_seen")
+                for mid, mdata in json.loads(lic.hwid_data or "{}").items()
+            },
         })
     return result
 
