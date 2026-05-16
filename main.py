@@ -719,9 +719,9 @@ async def cryptopay_status(invoice_id: str):
 # Update these values on every release
 # Railway may not expose it reliably; hardcoding is simpler and always correct).
 _MANIFEST = {
-    "version": "1.4.8",
-    "download_url": "https://github.com/RenatKost/ss/releases/download/v1.4.8/TrafficOS_Setup_v1.4.8.exe",
-    "notes": "v1.4.8: HMAC-подпись ответов лицензионного сервера, защита от подмены через прокси.",
+    "version": "1.4.9",
+    "download_url": "https://github.com/RenatKost/ss/releases/download/v1.4.9/TrafficOS_Setup_v1.4.9.exe",
+    "notes": "v1.4.9: ChannelPicker, фикс сессий аккаунтов, фикс workflow-нод (парсинг/истории/реакции), обновление без терминала.",
 }
 
 
