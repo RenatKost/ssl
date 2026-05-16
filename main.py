@@ -722,6 +722,7 @@ _MANIFEST = {
     "version": "1.5.0",
     "download_url": "https://github.com/RenatKost/ss/releases/download/v1.5.0/TrafficOS_Setup_v1.5.0.exe",
     "notes": "v1.5.0: Полная локализация интерфейса (RU, EN, UK, DE, FR, ES).",
+}
 
 
 def _version_gt(a: str, b: str) -> bool:
