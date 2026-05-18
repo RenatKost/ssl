@@ -1,5 +1,5 @@
 ﻿{
-  "version": "1.5.0",
-  "download_url": "https://github.com/RenatKost/ss/releases/download/v1.5.0/TrafficOS_Setup_v1.5.0.exe",
-  "notes": "Полная локализация интерфейса: RU, EN, UK, DE, FR, ES"
+  "version": "1.5.2",
+  "download_url": "https://github.com/RenatKost/ss/releases/download/v1.5.2/TrafficOS_Setup_v1.5.2.exe",
+  "notes": "Постинг в календаре: выбор куда публиковать (канал/группа/сторис). Редактор постов: полный постинг. Видео-автопостинг в сторис Telegram."
 }
