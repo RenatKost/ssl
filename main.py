@@ -719,9 +719,9 @@ async def cryptopay_status(invoice_id: str):
 # Update these values on every release
 # Railway may not expose it reliably; hardcoding is simpler and always correct).
 _MANIFEST = {
-    "version": "1.5.1",
-    "download_url": "https://github.com/RenatKost/ss/releases/download/v1.5.1/TrafficOS_Setup_v1.5.1.exe",
-    "notes": "v1.5.1: Исправление авто-обновления. Скачайте вручную если кнопка не помогла.",
+    "version": "1.5.2",
+    "download_url": "https://github.com/RenatKost/ss/releases/download/v1.5.2/TrafficOS_Setup_v1.5.2.exe",
+    "notes": "Постинг в календаре: выбор куда публиковать (канал/группа/сторис). Редактор постов: полный постинг. Видео-автопостинг в сторис Telegram.",
 }
 
 
