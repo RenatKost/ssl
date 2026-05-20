@@ -1,4 +1,4 @@
-﻿"""
+"""
 TGPars License Server
 Minimal FastAPI service for managing license keys.
 Deploy on Railway (free tier) or any VPS.
@@ -36,7 +36,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./licenses.db")
 ADMIN_TOKEN  = os.environ.get("ADMIN_TOKEN", "changeme-admin-secret")
 HMAC_SECRET  = os.environ.get("HMAC_SECRET", "").encode()
 
-# ── Payment / email config ────────────────────────────────────────────────────
+# -- Payment / email config ----------------------------------------------------
 RESEND_API_KEY            = os.environ.get("RESEND_API_KEY", "")
 FROM_EMAIL                = os.environ.get("FROM_EMAIL", "noreply@traffic-os.com")
 WEBSITE_URL               = os.environ.get("WEBSITE_URL", "https://traffic-os.com")
@@ -45,7 +45,7 @@ STRIPE_WEBHOOK_SECRET     = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 CRYPTOPAY_API_KEY         = os.environ.get("CRYPTOPAY_API_KEY", "")
 CRYPTOPAY_CALLBACK_SECRET = os.environ.get("CRYPTOPAY_CALLBACK_SECRET", "")
 
-# Stripe Price IDs — set in Railway env vars after creating products in Stripe Dashboard
+# Stripe Price IDs � set in Railway env vars after creating products in Stripe Dashboard
 STRIPE_PRICES: dict[str, str] = {
     "starter_monthly":    os.environ.get("STRIPE_PRICE_STARTER_MONTHLY", ""),
     "starter_yearly":     os.environ.get("STRIPE_PRICE_STARTER_YEARLY", ""),
@@ -173,7 +173,7 @@ def _generate_key() -> str:
 
 # ---------- Pydantic models ----------
 
-# Minimum client version allowed to validate (Phase 7 — version locking)
+# Minimum client version allowed to validate (Phase 7 � version locking)
 # Bump this to block clients older than a given version.
 MIN_VERSION = "1.0.0"
 
@@ -481,18 +481,18 @@ def delete_license(key: str, db: Session = Depends(_get_db)):
     return {"ok": True}
 
 
-# ── Email helper ──────────────────────────────────────────────────────────────
+# -- Email helper --------------------------------------------------------------
 
 async def _send_license_email(email: str, key: str, plan: str, expires_at) -> bool:
     if not RESEND_API_KEY:
-        log.warning("RESEND_API_KEY not set — skipping email to %s", email)
+        log.warning("RESEND_API_KEY not set � skipping email to %s", email)
         return False
     expires_str = expires_at.strftime("%d %B %Y") if expires_at else "Never"
     cabinet_url  = f"{WEBSITE_URL}/cabinet?key={key}"
     download_url = _MANIFEST["download_url"]
     body_html = f"""
 <div style="font-family:sans-serif;max-width:560px;margin:0 auto;color:#1a1a2e">
-  <h2 style="margin-bottom:4px">Your TrafficOS License 🎉</h2>
+  <h2 style="margin-bottom:4px">Your TrafficOS License ??</h2>
   <p style="color:#6b7280">Thank you for your purchase!</p>
   <div style="background:#f4f4f8;border-radius:10px;padding:20px 24px;margin:20px 0;
               font-size:24px;font-weight:700;letter-spacing:3px;text-align:center;
@@ -506,7 +506,7 @@ async def _send_license_email(email: str, key: str, plan: str, expires_at) -> bo
   <a href="{download_url}"
      style="display:inline-block;background:#4f46e5;color:#fff;padding:12px 24px;
             border-radius:8px;text-decoration:none;font-weight:600;margin-right:10px">
-    ⬇ Download TrafficOS
+    ? Download TrafficOS
   </a>
   <a href="{cabinet_url}"
      style="display:inline-block;background:#f4f4f8;color:#1a1a2e;padding:12px 24px;
@@ -514,8 +514,8 @@ async def _send_license_email(email: str, key: str, plan: str, expires_at) -> bo
     My Cabinet
   </a>
   <p style="margin-top:24px;color:#9ca3af;font-size:12px">
-    Keep this email — your key is the only way to manage your license.<br>
-    Enter it in TrafficOS: Settings → License → Activate.
+    Keep this email � your key is the only way to manage your license.<br>
+    Enter it in TrafficOS: Settings > License > Activate.
   </p>
 </div>"""
     try:
@@ -553,7 +553,7 @@ def _create_license_for_payment(db: Session, plan: str, period: str, email: str)
     return key, expires_at
 
 
-# ── Cabinet (public) ──────────────────────────────────────────────────────────
+# -- Cabinet (public) ----------------------------------------------------------
 
 @app.get("/cabinet/{key}")
 def cabinet(key: str, db: Session = Depends(_get_db)):
@@ -581,7 +581,7 @@ def cabinet(key: str, db: Session = Depends(_get_db)):
     }
 
 
-# ── Stripe ────────────────────────────────────────────────────────────────────
+# -- Stripe --------------------------------------------------------------------
 
 class StripeSessionRequest(BaseModel):
     plan: str
@@ -635,7 +635,7 @@ async def stripe_webhook(request: Request, db: Session = Depends(_get_db)):
     return {"ok": True}
 
 
-# ── Cryptopay ─────────────────────────────────────────────────────────────────
+# -- Cryptopay -----------------------------------------------------------------
 
 class CryptopayInvoiceRequest(BaseModel):
     plan: str
@@ -714,14 +714,14 @@ async def cryptopay_status(invoice_id: str):
     return {"paid": data.get("status") == "completed", "status": data.get("status", "")}
 
 
-# ── Auto-update endpoints ─────────────────────────────────────────────────────
+# -- Auto-update endpoints -----------------------------------------------------
 
 # Update these values on every release
 # Railway may not expose it reliably; hardcoding is simpler and always correct).
 _MANIFEST = {
-    "version": "1.5.4",
-    "download_url": "https://github.com/RenatKost/ss/releases/download/v1.5.4/TrafficOS_Setup_v1.5.4.exe",
-    "notes": "Фикс рассылки: сообщения больше не уходят в Избранное. Фикс рассылки в канал как администратор. Трекинг-ссылка в задаче теперь опциональна (чекбокс). Тип публикации (канал/группа/сторис) в кампаниях.",
+    "version": "1.5.5",
+    "download_url": "https://github.com/RenatKost/ss/releases/download/v1.5.5/TrafficOS_Setup_v1.5.5.exe",
+    "notes": "���� Stories/�������: ��������-���� ������ ������� ������������� � ��������� �� �������. ���� �������� (�� ������ � ���������). ����-���������� ����� � ��������� �����. ������� ��������� (Session/JSON/CSV). ETA-�������� � ����� ��������.",
 }
 
 
