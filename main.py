@@ -719,9 +719,9 @@ async def cryptopay_status(invoice_id: str):
 # Update these values on every release
 # Railway may not expose it reliably; hardcoding is simpler and always correct).
 _MANIFEST = {
-    "version": "1.5.3",
-    "download_url": "https://github.com/RenatKost/ss/releases/download/v1.5.3/TrafficOS_Setup_v1.5.3.exe",
-    "notes": "Импорт аккаунтов: TData папка (Telegram Desktop) и .session/.json файлы. Нативный выбор файла/папки через системный диалог.",
+    "version": "1.5.4",
+    "download_url": "https://github.com/RenatKost/ss/releases/download/v1.5.4/TrafficOS_Setup_v1.5.4.exe",
+    "notes": "Фикс рассылки: сообщения больше не уходят в Избранное. Фикс рассылки в канал как администратор. Трекинг-ссылка в задаче теперь опциональна (чекбокс). Тип публикации (канал/группа/сторис) в кампаниях.",
 }
 
 
