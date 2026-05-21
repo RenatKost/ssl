@@ -889,9 +889,9 @@ async def nowpayments_status(invoice_id: str, db: Session = Depends(_get_db)):
 # Update these values on every release
 # Railway may not expose it reliably; hardcoding is simpler and always correct).
 _MANIFEST = {
-    "version": "1.5.5",
-    "download_url": "https://github.com/RenatKost/ss/releases/download/v1.5.5/TrafficOS_Setup_v1.5.5.exe",
-    "notes": "Фикс Stories/Реакций: воркфлоу-узлы теперь реально просматривают и реагируют на истории. Фикс рассылки (не уходит в Избранное). Авто-сохранение видео в выбранную папку. Экспорт аккаунтов (Session/JSON/CSV). ETA-прогресс в узлах воркфлоу.",
+    "version": "1.5.6",
+    "download_url": "https://github.com/RenatKost/ss/releases/download/v1.5.6/TrafficOS_Setup_v1.5.6.exe",
+    "notes": "Фикс задержки между постами: теперь каждый аккаунт действительно ждёт N минут перед публикацией. Прогрев: настройка задержек.",
 }
 
 
