@@ -6,3 +6,4 @@ pydantic==2.10.3
 python-multipart==0.0.12
 httpx==0.28.1
 stripe==11.5.0
+slowapi==0.1.9

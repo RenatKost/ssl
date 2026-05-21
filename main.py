@@ -26,6 +26,9 @@ import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from sqlalchemy import Column, DateTime, Integer, String, Text, create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
@@ -47,6 +50,10 @@ CRYPTOPAY_CALLBACK_SECRET = os.environ.get("CRYPTOPAY_CALLBACK_SECRET", "")
 
 # Stripe Price IDs — set in Railway env vars after creating products in Stripe Dashboard
 STRIPE_PRICES: dict[str, str] = {
+    # New plans (Phase 1)
+    "telegram_monthly":   os.environ.get("STRIPE_PRICE_TG_MONTHLY", ""),
+    "telegram_halfyear":  os.environ.get("STRIPE_PRICE_TG_HALFYEAR", ""),
+    # Legacy plans kept for existing customers
     "starter_monthly":    os.environ.get("STRIPE_PRICE_STARTER_MONTHLY", ""),
     "starter_yearly":     os.environ.get("STRIPE_PRICE_STARTER_YEARLY", ""),
     "pro_monthly":        os.environ.get("STRIPE_PRICE_PRO_MONTHLY", ""),
@@ -55,9 +62,10 @@ STRIPE_PRICES: dict[str, str] = {
     "enterprise_yearly":  os.environ.get("STRIPE_PRICE_ENT_YEARLY", ""),
 }
 
-PLAN_PERIODS: dict[str, int] = {"monthly": 30, "yearly": 365}
+PLAN_PERIODS: dict[str, int] = {"monthly": 30, "halfyear": 182, "yearly": 365}
 
-_PLAN_PRICES_USD: dict[str, int] = {
+_PLAN_PRICES_USD: dict[str, float] = {
+    "telegram_monthly":  9.99, "telegram_halfyear": 49.99,
     "starter_monthly": 19,  "starter_yearly": 149,
     "pro_monthly":     39,  "pro_yearly":     299,
     "enterprise_monthly": 99, "enterprise_yearly": 799,
@@ -87,17 +95,25 @@ class License(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     key = Column(String(64), unique=True, index=True, nullable=False)
-    plan = Column(String(32), nullable=False, default="starter")  # trial|starter|pro|enterprise
+    plan = Column(String(32), nullable=False, default="starter")  # trial|telegram_monthly|telegram_halfyear|starter|pro|enterprise
     # JSON array of up to max_machines machine_id strings
     machine_ids = Column(Text, nullable=False, default="[]")
     max_machines = Column(Integer, nullable=False, default=2)
     expires_at = Column(DateTime, nullable=True)       # NULL = never expires
-    trial_days = Column(Integer, nullable=True)        # only for trial plan
+    trial_days = Column(Integer, nullable=True)        # legacy: only for old trial plan
     activated_at = Column(DateTime, nullable=True)     # first activation timestamp
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.utcnow())
     notes = Column(Text, nullable=True)
     # JSON dict: {machine_id: {components: {...}, last_seen: "ISO"}}
     hwid_data = Column(Text, nullable=False, default="{}")
+
+
+class TrialMachine(Base):
+    __tablename__ = "trial_machines"
+
+    id = Column(Integer, primary_key=True, index=True)
+    machine_id = Column(String(64), unique=True, index=True, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.utcnow())
 
 
 Base.metadata.create_all(bind=engine)
@@ -121,13 +137,29 @@ _ensure_columns()
 # ---------- Feature flags per plan ----------
 
 PLAN_FEATURES: dict[str, dict] = {
+    # Active plans
     "trial": {
-        "max_accounts": 50,
-        "max_messages_day": 1500,
+        "max_accounts": 5,
+        "max_messages_day": 100,
         "instagram": False,
         "twitter": False,
         "video": False,
     },
+    "telegram_monthly": {
+        "max_accounts": -1,
+        "max_messages_day": -1,
+        "instagram": True,
+        "twitter": True,
+        "video": True,
+    },
+    "telegram_halfyear": {
+        "max_accounts": -1,
+        "max_messages_day": -1,
+        "instagram": True,
+        "twitter": True,
+        "video": True,
+    },
+    # Legacy plans kept for existing customers
     "starter": {
         "max_accounts": 50,
         "max_messages_day": 1500,
@@ -230,7 +262,11 @@ class GenerateRequest(BaseModel):
 
 # ---------- App ----------
 
+limiter = Limiter(key_func=get_remote_address)
+
 app = FastAPI(title="TGPars License Server", version="1.0.0")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -246,7 +282,8 @@ def health():
 
 
 @app.post("/validate")
-def validate(req: ValidateRequest, db: Session = Depends(_get_db)):
+@limiter.limit("60/minute")
+def validate(request: Request, req: ValidateRequest, db: Session = Depends(_get_db)):
     """Called by TGPars app on startup and every 30 min."""
     now = datetime.utcnow()
     server_time = now.isoformat()
@@ -316,7 +353,8 @@ def validate(req: ValidateRequest, db: Session = Depends(_get_db)):
 
 
 @app.post("/activate")
-def activate(req: ActivateRequest, db: Session = Depends(_get_db)):
+@limiter.limit("5/minute")
+def activate(request: Request, req: ActivateRequest, db: Session = Depends(_get_db)):
     """Bind machine_id to license key. Returns error if machine limit reached."""
     lic = db.query(License).filter(License.key == req.key).first()
     if not lic:
@@ -361,6 +399,56 @@ def activate(req: ActivateRequest, db: Session = Depends(_get_db)):
         "days_left": days_left,
         "server_time": server_time,
         "__sig": _sign_response(True, lic.plan, expires_at_str, server_time),
+    }
+
+
+class TrialRequest(BaseModel):
+    machine_id: str
+    hwid_components: Optional[dict] = None
+
+
+@app.post("/trial")
+@limiter.limit("3/minute")
+def create_trial(request: Request, req: TrialRequest, db: Session = Depends(_get_db)):
+    """Create a 24-hour trial key. One per machine_id."""
+    if db.query(TrialMachine).filter(TrialMachine.machine_id == req.machine_id).first():
+        raise HTTPException(status_code=409, detail="trial_already_used")
+
+    now = datetime.utcnow()
+    key = _generate_key()
+    expires_at = now + timedelta(hours=24)
+
+    lic = License(
+        key=key,
+        plan="trial",
+        machine_ids=json.dumps([req.machine_id]),
+        max_machines=1,
+        expires_at=expires_at,
+        activated_at=now,
+        notes=f"trial:{req.machine_id}",
+    )
+    if req.hwid_components:
+        lic.hwid_data = json.dumps({
+            req.machine_id: {"components": req.hwid_components, "last_seen": now.isoformat()}
+        })
+    db.add(lic)
+    db.add(TrialMachine(machine_id=req.machine_id))
+    db.commit()
+    db.refresh(lic)
+
+    server_time = now.isoformat()
+    expires_at_str = expires_at.isoformat()
+    features = PLAN_FEATURES.get("trial", {})
+    return {
+        "key": key,
+        "valid": True,
+        "plan": "trial",
+        "features": features,
+        "expires_at": expires_at_str,
+        "hours_left": 24,
+        "days_left": 0,
+        "server_time": server_time,
+        "__sig": _sign_response(True, "trial", expires_at_str, server_time),
     }
 
 
@@ -541,11 +629,12 @@ async def _send_license_email(email: str, key: str, plan: str, expires_at) -> bo
 
 
 def _create_license_for_payment(db: Session, plan: str, period: str, email: str) -> tuple:
+    plan_key = f"{plan}_{period}" if period else plan
     days = PLAN_PERIODS.get(period, 30)
     key = _generate_key()
     expires_at = datetime.utcnow() + timedelta(days=days)
     lic = License(
-        key=key, plan=plan, machine_ids="[]", max_machines=2,
+        key=key, plan=plan_key, machine_ids="[]", max_machines=2,
         expires_at=expires_at, notes=f"payment:{email}",
     )
     db.add(lic)
