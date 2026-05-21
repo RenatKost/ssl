@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -302,7 +302,7 @@ def health():
 
 @app.post("/validate")
 @limiter.limit("60/minute")
-def validate(request: Request, req: ValidateRequest, db: Session = Depends(_get_db)):
+def validate(request: Request, req: ValidateRequest = Body(...), db: Session = Depends(_get_db)):
     """Called by TGPars app on startup and every 30 min."""
     now = datetime.utcnow()
     server_time = now.isoformat()
@@ -373,7 +373,7 @@ def validate(request: Request, req: ValidateRequest, db: Session = Depends(_get_
 
 @app.post("/activate")
 @limiter.limit("5/minute")
-def activate(request: Request, req: ActivateRequest, db: Session = Depends(_get_db)):
+def activate(request: Request, req: ActivateRequest = Body(...), db: Session = Depends(_get_db)):
     """Bind machine_id to license key. Returns error if machine limit reached."""
     lic = db.query(License).filter(License.key == req.key).first()
     if not lic:
@@ -428,7 +428,7 @@ class TrialRequest(BaseModel):
 
 @app.post("/trial")
 @limiter.limit("3/minute")
-def create_trial(request: Request, req: TrialRequest, db: Session = Depends(_get_db)):
+def create_trial(request: Request, req: TrialRequest = Body(...), db: Session = Depends(_get_db)):
     """Create a 24-hour trial key. One per machine_id."""
     if db.query(TrialMachine).filter(TrialMachine.machine_id == req.machine_id).first():
         raise HTTPException(status_code=409, detail="trial_already_used")
