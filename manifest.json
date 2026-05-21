@@ -1,5 +1,5 @@
 ﻿{
-  "version": "1.5.2",
-  "download_url": "https://github.com/RenatKost/ss/releases/download/v1.5.2/TrafficOS_Setup_v1.5.2.exe",
-  "notes": "Постинг в календаре: выбор куда публиковать (канал/группа/сторис). Редактор постов: полный постинг. Видео-автопостинг в сторис Telegram."
+  "version": "1.5.6",
+  "download_url": "https://github.com/RenatKost/ss/releases/download/v1.5.6/TrafficOS_Setup_v1.5.6.exe",
+  "notes": "Фикс задержки между постами: теперь каждый аккаунт действительно ждёт N минут перед публикацией. Прогрев: настройка задержек."
 }
