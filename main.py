@@ -29,7 +29,8 @@ from pydantic import BaseModel
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
-from sqlalchemy import Column, DateTime, Integer, String, Text, create_engine, text
+import uuid as _uuid
+from sqlalchemy import Column, DateTime, Float, Integer, String, Text, create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 logging.basicConfig(level=logging.INFO)
@@ -45,8 +46,8 @@ FROM_EMAIL                = os.environ.get("FROM_EMAIL", "noreply@traffic-os.com
 WEBSITE_URL               = os.environ.get("WEBSITE_URL", "https://traffic-os.com")
 STRIPE_SECRET_KEY         = os.environ.get("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET     = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
-CRYPTOPAY_API_KEY         = os.environ.get("CRYPTOPAY_API_KEY", "")
-CRYPTOPAY_CALLBACK_SECRET = os.environ.get("CRYPTOPAY_CALLBACK_SECRET", "")
+NOWPAYMENTS_API_KEY    = os.environ.get("NOWPAYMENTS_API_KEY", "")
+NOWPAYMENTS_IPN_SECRET = os.environ.get("NOWPAYMENTS_IPN_SECRET", "")
 
 # Stripe Price IDs — set in Railway env vars after creating products in Stripe Dashboard
 STRIPE_PRICES: dict[str, str] = {
@@ -114,6 +115,24 @@ class TrialMachine(Base):
     id = Column(Integer, primary_key=True, index=True)
     machine_id = Column(String(64), unique=True, index=True, nullable=False)
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.utcnow())
+
+
+class Payment(Base):
+    __tablename__ = "payments"
+
+    id           = Column(Integer, primary_key=True)
+    order_id     = Column(String(64), unique=True, index=True, nullable=False)
+    method       = Column(String(16), nullable=False)   # stripe | nowpayments
+    plan         = Column(String(32), nullable=False)
+    period       = Column(String(16), nullable=False)
+    email        = Column(String(255), nullable=False)
+    amount_usd   = Column(Float, nullable=False)
+    currency     = Column(String(16), nullable=True)    # card | USDT | BTC | …
+    external_id  = Column(String(128), nullable=True)   # Stripe session_id | NP invoice_id
+    status       = Column(String(16), nullable=False, default="pending")
+    license_key  = Column(String(64), nullable=True)
+    created_at   = Column(DateTime, nullable=False, default=lambda: datetime.utcnow())
+    completed_at = Column(DateTime, nullable=True)
 
 
 Base.metadata.create_all(bind=engine)
@@ -569,6 +588,29 @@ def delete_license(key: str, db: Session = Depends(_get_db)):
     return {"ok": True}
 
 
+@app.get("/admin/payments", dependencies=[Depends(_require_admin)])
+def list_payments(db: Session = Depends(_get_db)):
+    payments = db.query(Payment).order_by(Payment.created_at.desc()).limit(200).all()
+    return [
+        {
+            "id": p.id,
+            "order_id": p.order_id,
+            "method": p.method,
+            "plan": p.plan,
+            "period": p.period,
+            "email": p.email,
+            "amount_usd": p.amount_usd,
+            "currency": p.currency,
+            "external_id": p.external_id,
+            "status": p.status,
+            "license_key": p.license_key,
+            "created_at": p.created_at.isoformat(),
+            "completed_at": p.completed_at.isoformat() if p.completed_at else None,
+        }
+        for p in payments
+    ]
+
+
 # ── Email helper ──────────────────────────────────────────────────────────────
 
 async def _send_license_email(email: str, key: str, plan: str, expires_at) -> bool:
@@ -714,93 +756,132 @@ async def stripe_webhook(request: Request, db: Session = Depends(_get_db)):
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     if event["type"] == "checkout.session.completed":
-        meta  = event["data"]["object"].get("metadata", {})
-        email  = meta.get("email", "")
-        plan   = meta.get("plan", "starter")
-        period = meta.get("period", "monthly")
+        sess_obj = event["data"]["object"]
+        meta     = sess_obj.get("metadata", {})
+        email    = meta.get("email", "")
+        plan     = meta.get("plan", "starter")
+        period   = meta.get("period", "monthly")
         key, expires_at = _create_license_for_payment(db, plan, period, email)
+        pmt = Payment(
+            order_id=str(_uuid.uuid4()),
+            method="stripe", plan=plan, period=period, email=email,
+            amount_usd=_PLAN_PRICES_USD.get(f"{plan}_{period}", 0),
+            currency="card", external_id=sess_obj.get("id", ""),
+            status="paid", license_key=key, completed_at=datetime.utcnow(),
+        )
+        db.add(pmt)
+        db.commit()
         log.info("Stripe payment OK: plan=%s email=%s key=%s", plan, email, key)
         asyncio.create_task(_send_license_email(email, key, plan, expires_at))
     return {"ok": True}
 
 
-# ── Cryptopay ─────────────────────────────────────────────────────────────────
+# ── NOWPayments ───────────────────────────────────────────────────────────────
 
-class CryptopayInvoiceRequest(BaseModel):
+_NOWPAYMENTS_CURRENCY_MAP: dict[str, str] = {
+    "USDT": "usdttrc20",
+    "BTC":  "btc",
+    "ETH":  "eth",
+    "LTC":  "ltc",
+    "TON":  "ton",
+}
+
+
+class NowpaymentsInvoiceRequest(BaseModel):
     plan: str
     period: str
     email: str
     currency: str = "USDT"
 
 
-@app.post("/payment/cryptopay/create-invoice")
-async def cryptopay_create_invoice(req: CryptopayInvoiceRequest):
-    if not CRYPTOPAY_API_KEY:
-        raise HTTPException(status_code=503, detail="Cryptopay not configured")
+@app.post("/payment/nowpayments/create-invoice")
+async def nowpayments_create_invoice(req: NowpaymentsInvoiceRequest, db: Session = Depends(_get_db)):
+    if not NOWPAYMENTS_API_KEY:
+        raise HTTPException(status_code=503, detail="NOWPayments not configured")
     price_key = f"{req.plan}_{req.period}"
     amount = _PLAN_PRICES_USD.get(price_key)
     if not amount:
         raise HTTPException(status_code=400, detail=f"Unknown plan/period: {price_key}")
-    # Webhook must point to the license server (Railway URL), not the website
-    license_server_url = os.environ.get(
-        "LICENSE_SERVER_URL", "https://web-production-8c6356.up.railway.app"
+
+    order_id = str(_uuid.uuid4())
+    pmt = Payment(
+        order_id=order_id, method="nowpayments",
+        plan=req.plan, period=req.period, email=req.email,
+        amount_usd=amount, currency=req.currency, status="pending",
     )
+    db.add(pmt)
+    db.commit()
+
+    license_server_url = os.environ.get("LICENSE_SERVER_URL", "https://web-production-8c6356.up.railway.app")
+    pay_currency = _NOWPAYMENTS_CURRENCY_MAP.get(req.currency.upper(), "usdttrc20")
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.post(
-            "https://business.cryptopay.me/api/invoices",
-            headers={"Authorization": f"Bearer {CRYPTOPAY_API_KEY}", "Content-Type": "application/json"},
+            "https://api.nowpayments.io/v1/invoice",
+            headers={"x-api-key": NOWPAYMENTS_API_KEY, "Content-Type": "application/json"},
             json={
                 "price_amount": amount,
-                "price_currency": "USD",
-                "pay_currency": req.currency,
-                "description": f"TrafficOS {req.plan.title()} ({req.period})",
-                "callback_url": f"{license_server_url}/payment/cryptopay/webhook",
-                "metadata": {"plan": req.plan, "period": req.period, "email": req.email},
+                "price_currency": "usd",
+                "pay_currency": pay_currency,
+                "order_id": order_id,
+                "order_description": f"TrafficOS {req.plan.title()} ({req.period})",
+                "ipn_callback_url": f"{license_server_url}/payment/nowpayments/webhook",
+                "success_url": f"{WEBSITE_URL}/success?email={req.email}",
+                "cancel_url": f"{WEBSITE_URL}/pricing",
             },
         )
     if resp.status_code not in (200, 201):
-        log.warning("Cryptopay error %s: %s", resp.status_code, resp.text)
-        raise HTTPException(status_code=502, detail="Cryptopay error")
-    data = resp.json().get("data", resp.json())
-    return {"invoice_url": data.get("hosted_page_url", ""), "invoice_id": str(data.get("id", ""))}
+        log.warning("NOWPayments error %s: %s", resp.status_code, resp.text)
+        raise HTTPException(status_code=502, detail="NOWPayments error")
+    data = resp.json()
+    invoice_id = str(data.get("id", ""))
+    pmt.external_id = invoice_id
+    db.commit()
+    return {"invoice_url": data.get("invoice_url", ""), "invoice_id": invoice_id}
 
 
-@app.post("/payment/cryptopay/webhook")
-async def cryptopay_webhook(request: Request, db: Session = Depends(_get_db)):
+@app.post("/payment/nowpayments/webhook")
+async def nowpayments_webhook(request: Request, db: Session = Depends(_get_db)):
     import asyncio
     payload = await request.body()
-    if CRYPTOPAY_CALLBACK_SECRET:
-        sig = request.headers.get("x-cryptopay-signature", "")
+    if NOWPAYMENTS_IPN_SECRET:
+        sig = request.headers.get("x-nowpayments-sig", "")
+        body_data = json.loads(payload)
+        sorted_payload = json.dumps(body_data, sort_keys=True, separators=(",", ":"))
         expected = _hmac_pay.new(
-            CRYPTOPAY_CALLBACK_SECRET.encode(), payload, _hashlib_pay.sha256
+            NOWPAYMENTS_IPN_SECRET.encode(), sorted_payload.encode(), _hashlib_pay.sha512
         ).hexdigest()
-        if not _hmac_pay.compare_digest(sig, expected):
+        if not _hmac_pay.compare_digest(sig.lower(), expected.lower()):
             raise HTTPException(status_code=400, detail="Invalid signature")
+
     body = json.loads(payload)
-    invoice = body.get("data", body)
-    if invoice.get("status") != "completed":
+    payment_status = body.get("payment_status", "")
+    order_id = str(body.get("order_id", ""))
+    if payment_status not in ("finished", "confirmed"):
         return {"ok": True}
-    meta   = invoice.get("metadata", {})
-    email  = meta.get("email", "")
-    plan   = meta.get("plan", "starter")
-    period = meta.get("period", "monthly")
-    key, expires_at = _create_license_for_payment(db, plan, period, email)
-    log.info("Cryptopay payment OK: plan=%s email=%s key=%s", plan, email, key)
-    asyncio.create_task(_send_license_email(email, key, plan, expires_at))
+
+    pmt = db.query(Payment).filter(Payment.order_id == order_id).first()
+    if not pmt:
+        log.warning("NOWPayments webhook: no payment for order_id=%s", order_id)
+        return {"ok": True}
+    if pmt.status == "paid":
+        return {"ok": True}
+
+    key, expires_at = _create_license_for_payment(db, pmt.plan, pmt.period, pmt.email)
+    pmt.status = "paid"
+    pmt.license_key = key
+    pmt.completed_at = datetime.utcnow()
+    db.commit()
+    log.info("NOWPayments OK: plan=%s email=%s key=%s", pmt.plan, pmt.email, key)
+    asyncio.create_task(_send_license_email(pmt.email, key, pmt.plan, expires_at))
     return {"ok": True}
 
 
-@app.get("/payment/cryptopay/status/{invoice_id}")
-async def cryptopay_status(invoice_id: str):
-    if not CRYPTOPAY_API_KEY:
-        raise HTTPException(status_code=503, detail="Cryptopay not configured")
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(
-            f"https://business.cryptopay.me/api/invoices/{invoice_id}",
-            headers={"Authorization": f"Bearer {CRYPTOPAY_API_KEY}"},
-        )
-    data = resp.json().get("data", resp.json())
-    return {"paid": data.get("status") == "completed", "status": data.get("status", "")}
+@app.get("/payment/nowpayments/status/{invoice_id}")
+async def nowpayments_status(invoice_id: str, db: Session = Depends(_get_db)):
+    pmt = db.query(Payment).filter(Payment.external_id == invoice_id).first()
+    if not pmt:
+        return {"paid": False, "status": "not_found"}
+    return {"paid": pmt.status == "paid", "status": pmt.status}
 
 
 # ── Auto-update endpoints ─────────────────────────────────────────────────────
