@@ -889,9 +889,9 @@ async def nowpayments_status(invoice_id: str, db: Session = Depends(_get_db)):
 # Update these values on every release
 # Railway may not expose it reliably; hardcoding is simpler and always correct).
 _MANIFEST = {
-    "version": "1.5.6",
-    "download_url": "https://github.com/RenatKost/ss/releases/download/v1.5.6/TrafficOS_Setup_v1.5.6.exe",
-    "notes": "Фикс задержки между постами: теперь каждый аккаунт действительно ждёт N минут перед публикацией. Прогрев: настройка задержек.",
+    "version": "1.5.7",
+    "download_url": "https://github.com/RenatKost/ss/releases/download/v1.5.7/TrafficOS_Setup_v1.5.7.exe",
+    "notes": "Кнопки Trial и покупки открывают сайт. Фикс баннера обновлений.",
 }
 
 
